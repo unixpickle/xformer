@@ -133,3 +133,39 @@ def test_past_horizon(cell_cls):
             assert not np.isnan(expected).any()
             assert actual.shape == expected.shape
             assert np.allclose(actual, expected)
+
+
+@pytest.mark.parametrize('cell_cls', [LimitedTransformerCell, UnlimitedTransformerCell])
+def test_mismatched_starts(cell_cls):
+    """
+    Test the cell when the states are split up and
+    recombined from different timesteps.
+    """
+    with tf.Graph().as_default():
+        with tf.Session() as sess:
+            pos_enc = positional_encoding(5, 6, dtype=tf.float64)
+            in_seq = tf.get_variable('in_seq',
+                                     shape=(3, 5, 6),
+                                     initializer=tf.truncated_normal_initializer(),
+                                     dtype=tf.float64)
+            cell = cell_cls(pos_enc, num_layers=3, num_heads=2, hidden=24)
+            _, states_1 = tf.nn.dynamic_rnn(cell, in_seq[:, :1], dtype=tf.float64)
+            _, states_2 = tf.nn.dynamic_rnn(cell, in_seq[:, :2], dtype=tf.float64)
+            _, states_3 = tf.nn.dynamic_rnn(cell, in_seq[:, :3], dtype=tf.float64)
+            new_states = tuple(tf.stack([s2[0], s3[1], s1[2]], axis=0)
+                               for s1, s2, s3 in zip(states_1, states_2, states_3))
+
+            full_seq, _ = tf.nn.dynamic_rnn(cell, in_seq, dtype=tf.float64)
+            expected = tf.stack([full_seq[0, 2:4], full_seq[1, 3:5], full_seq[2, 1:3]], axis=0)
+
+            inputs = tf.stack([in_seq[0, 2:4], in_seq[1, 3:5], in_seq[2, 1:3]], axis=0)
+            actual, _ = tf.nn.dynamic_rnn(cell, inputs, initial_state=new_states)
+
+            sess.run(tf.global_variables_initializer())
+
+            actual, expected = sess.run((actual, expected))
+
+            assert not np.isnan(actual).any()
+            assert not np.isnan(expected).any()
+            assert actual.shape == expected.shape
+            assert np.allclose(actual, expected)
